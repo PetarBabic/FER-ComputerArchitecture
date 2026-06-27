@@ -1,0 +1,94 @@
+        ; stack initialization
+        ADDI    SP, X0, 0X100     
+        SLLI    SP, SP, 8  
+
+        ;button and switch initialization
+        LUI     S2, %HI(0XFFFF0B00)
+        ADDI    S2, S2, %LO(0XFFFF0B00)
+
+        ADDI    S3, ZERO, 0b11100000    
+        SW      S3, 8(S2)
+        ; S3 = address of button and switch
+        ; 0th bit button
+        ; 1st bit switch
+
+        ; loading the LCD address into S0
+        LUI     S0, %HI(0XFFFF0F00)
+        ADDI    S0,S0,%LO(0XFFFF0F00)   ;S0 = LCD address
+
+        ADDI    T1, ZERO, 1     ; save one to register T1, to compare if the button or switch are pressed
+        ; initialise the counter to 0
+        ADD     A3, ZERO, ZERO          ; A3 = counter
+        ; print out 0 in ones space on simulation start
+        JAL     RA, obradi
+        BEQ     ZERO, ZERO, PRINT
+
+; ---------------------------------------------------------------------
+LOOP
+        LW      S3, 0(S2)
+        ANDI    S4, S3, 0b1     ; button state    
+        ANDI    S5, S3, 0b10    ; switch state
+        SRLI    S5, S5, 1       ; shift the switch bit to the right
+
+        ; if switch isn't closed jump back to LOOP
+        BNE     S5, T1, LOOP
+        ; if the button isn't pressed jump back to LOOP
+        BNE     S4, T1, LOOP
+        ; if the switch is closed and the button is pressed increase the counter
+        ADDI    A3, A3, 1
+        ANDI    A3, A3, 0b1111  ; mask only the last 4 bits
+        JAL     RA, obradi      ; send the number to function obradi to be divided into ones and tens
+
+PRINT   ; clear the LCD
+        ADDI    A7, ZERO, 0x0D
+        JAL     RA, LCDWR
+        ; send tens to the lcd register
+        ADD     A7, ZERO, A0
+        JAL     RA, LCDWR
+        ; send ones to the lcd register
+        ADD     A7, ZERO, A1
+        JAL     RA, LCDWR
+        ; send the signal to print it out
+        ADDI    A7, ZERO, 0x0A
+        JAL     RA, lcdwr
+        
+        BEQ     ZERO, ZERO, LOOP
+; ---------------------------------------------------------------------
+
+        HALT
+
+; taken from presentation FRISC - UI
+LCDWR
+        ANDI    A7, A7,0X7F
+        SB      A7, 4(S0)
+        ORI     A7, A7,0X80
+        SB      A7, 4(S0)
+        ANDI    A7, A7,0X7F
+        SB      A7, 4(S0)
+        JALR    X0, 0(RA)  
+
+; split the number (A3) into tens (A0) and ones (A1)
+obradi  ;saving function context to stack
+        ADDI    SP, SP, -4
+        SW      T0, 0(SP)  
+
+        ADD     A1, ZERO, A3    ; save the number passed as the argument into ones
+        ; save blank space into tens (blank space - '0')
+        ADDI    T0, ZERO, 0x30
+        ADDI    A0, ZERO, 0x20
+        SUB     A0, A0, T0  
+
+        ; if the number is less than 10 jump to RETURN
+        ADDI    T0, ZERO, 10
+        BLT     A3, T0, RETURN  
+        ; if the number is greater than 10, just save 1 into register A0 and subtract the given number from 10
+        ADDI    A0, ZERO, 1  
+        SUB     A1, A3, T0     
+RETURN
+        ; calculating the ascii value of the number/blank space
+        ADDI    A0, A0, 48
+        ADDI    A1, A1, 48
+        ; context recovery
+        LW      T0, 0(SP)
+        ADDI    SP, SP, 4
+        JALR    X0, 0(RA)       ; jumping back to the main LOOP

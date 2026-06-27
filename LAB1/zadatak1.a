@@ -1,0 +1,114 @@
+        MOV     R5, #0x600      ;registar za pohranu mem adrese od podataka
+        MOV     R6, #0x2000     ;registar za pohranum mem adrese od rezultata
+        MOV     SP, #0x10000    ;inicijalizacija stoga
+
+PETLJA  MOV     R0, #0
+        LDMIA   R5!, {R1, R2, R3}       ;ucitavanje podataka s mem adrese spremljene u R5
+;usporedba i odradjivanje zadane operacije
+        ;oduzimanje
+        CMP     R3, #0
+        SUBEQ   R0, R1, R2  
+        BEQ SPREMI
+
+        ;zbrajanje
+        CMP     R3, #1
+        ADDEQ   R0, R1, R2 
+        BEQ SPREMI
+
+        ;mnozenje     
+        CMP     R3, #2
+        MULEQS  R0, R1, R2
+        BEQ SPREMI
+
+        ;dijeljenje    
+        CMP     R3, #3
+        SUBEQ   SP, SP, #4      ;napravi mjesta na stogu za rezultat
+        STMEQFD SP!, {R1, R2}   ;spremi na stog operande
+        BLEQ    DIJELI          ;pokreni potprogram DIJELI
+        ADDEQ     SP, SP, #8      ;obrisi sa stog-a spremljene operande
+        LDMEQFD   SP!, {R0}       ;spremi rezultat sa stoga u R0
+        BEQ SPREMI
+
+        ;provjera za prekid izvodjenja
+        CMN     R3, #0
+        BMI     KRAJ
+
+SPREMI  STR     R0, [R6], #4    ;na memorijsku adresu u R6 spremi rezultat zadane operacije
+        B       PETLJA
+
+KRAJ    STR     R3, [R6], #4    ;;na memorijsku adresu u R6 spremi znak za kraj izvodjenja
+        SWI     0x123456
+
+;potprogram za dijeljenje
+DIJELI  STMFD   SP!, {R0-R4}    ;spremi kontekst za koristene registre
+        MRS     R4, CPSR        ;spremi kontekst CPSR zastavica
+        ;dohvat 1. i 2. operand sa stoga i upisi ih u registre
+        LDR     R1, [SP, #4]
+        LDR     R2, [SP, #8]
+; R0 - rezultat
+; R1 - djeljenik
+; R2 - djelitelj
+; R3 - zastavica za negativan broj, LSB == 0 (+), LSB == 1 (-)
+; R4 - CPSR zastavice
+
+        MOV     R0, #0  ;postavi rezultat u 0
+
+        ;ako je 2. operand 0, vrati 0
+        CMP     R2, #0
+        BEQ     VRATI
+
+        ;provjera jesu li brojevi negativni i postavljanje zastavice, te uzima apsolutne vrijednosti
+        MOV     R3, #0
+        CMP     R1, #0          ;usporedjuje broj u R1 s 0 da vidi je li veci ili manji
+        RSBMI   R1, R1, #0      ;ako je broj negativan uzmi apsolutnu vrijednost
+        ADDMI   R3, R3, #0b1    ;povecaj zastavicu za 1 ako je broj neg
+
+        CMP     R2, #0          ;usporedjuje broj u R2 s 0 da vidi je li veci ili manji
+        RSBMI   R2, R2, #0      ;ako je broj negativan uzmi apsolutnu vrijednost
+        ADDMI   R3, R3, #0b1    ;povecaj zastavicu za 1 ako je broj neg
+        AND     R3, R3, #0x1    ;maskira i postavlja zadnji bit u 0/1
+
+;dijeljenje uzastopnim oduzimanjem
+ODUZIMAJ
+        SUBS    R1, R1, R2
+        ADDPL   R0, R0, #1
+        BPL     ODUZIMAJ
+
+VRATI  
+        CMP     R3, #1         
+        RSBEQ   R0, R0, #0      ;ako je rezultat negativan, negiraj ga
+        STR     R0, [SP, #28]   ;spremi R0 na stog  
+
+        MSR     CPSR, R4      ;vrati CPSR zastavice
+        LDMFD   SP!, {R0-R4}    ;vrati kontekst
+        MOV     PC, LR  ;vrati se u glavni program
+
+;podatci
+        ORG     0x600
+        DW      0xFFFFFEFF
+        DW      0x00000010
+        DW      0x00000003
+        DW      0x000001F4
+        DW      0xFFFFFD44
+        DW      0x00000000
+        DW      0x00000003
+        DW      0xFFFFFFEC
+        DW      0x00000001
+        DW      0xFFFFFFFE
+        DW      0x0000000A
+        DW      0x00000002
+        DW      0xFFFFF000
+        DW      0xFFFFFFC0
+        DW      0x00000003
+        DW      0x00000001
+        DW      0x00000004
+        DW      0xFFFFFFFF
+
+;pohrana
+        ORG     0x2000
+        DW      0x0
+        DW      0x0
+        DW      0x0
+        DW      0x0
+        DW      0x0
+        DW      0x0

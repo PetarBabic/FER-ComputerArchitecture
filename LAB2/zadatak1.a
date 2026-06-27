@@ -1,0 +1,298 @@
+        ORG     0
+        B       INIT
+        ORG     0x18
+        B       IRQ
+
+;R1 - commonly used for UI device adress
+;R2 - state counter
+;R3 - button counter
+;R4 - 6. state counter
+;R9 - always used to pass the argument to some of the functions
+
+
+INIT    ;Stack initialization
+        ;IRQ Stack
+        MSR     CPSR, #0b11010010
+        MOV     SP, #0x10000
+
+        ;SVC stack
+        MSR     CPSR, #0b11010011
+        MOV     SP, #0xFC00
+
+        ; Enable IRQ
+        MRS     R0, CPSR
+        BIC     R0, R0, #0b10000000
+        MSR     CPSR, R0
+
+        ; Initializing leds and the button
+        LDR     R1, GPIO
+        MOV     R0, #0b11100000 
+        STR     R0, [R1, #8]  
+
+STATE1  ; The coffee machine is ready
+        ; Initializing RTC for 5 cycles so that it instantly accepts the interrupt when the button is pressed
+        LDR     R1, RTC
+        MOV     R0, #5
+        STR     R0, [R1, #4]    ; set the MR register to 1
+        MOV     R0, #0
+        STR     R0, [R1, #12]   ; Set LR to 0
+
+        ; Turn off all of the leds
+        MOV     R9, #0
+        BL      LEDS
+        ; Write out "SPREMNO"
+        MOV     R9, #SPRE
+        BL      LCDPRNT
+
+        ; Button counter
+        MOV     R3, #0
+        ; State counter
+        MOV     R2, #1
+        ; Load RTC address into R1
+        LDR     R1, RTC
+        ; Counter for how many times the 6. state was done
+        MOV     R4, #0
+
+LOOP    BL      BTN_CHK
+        ADDEQ   R3, R3, #1
+
+        CMP     R3, #1
+
+        MOVGE   R0, #1
+        STRGE   R0, [R1, #16]   ; If the button was pressed once enable IRQ in RTC
+
+        ; If the button was pressed twice invoke and state 6 isn't beeing processed
+        ; invoke a new interrupt by setting the MR to be equal to DR + 2
+        CMP     R3, #2  ; How many times was the button pressed
+        CMPEQ   R4, #0  ; Is it processing the 6th state
+        LDREQ   R0, [R1]
+        ADD     R0, R0, #2
+        STREQ   R0, [R1, #4]
+        
+        B       LOOP  ;if the button wasn't pressed repeate
+
+
+; Heating the coffee machine
+STATE2  STMFD   SP!, {R9, LR}
+         ; Initializing RTC for 30s
+        LDR     R1, RTC
+        LDR     R0, CONST30
+        STR     R0, [R1, #4]    ; set the MR register to 30
+
+                
+        ; Turn on the Red led 
+        MOV     R9, #0b00100000 
+        BL      LEDS  
+        ; Write out on LCD "PRIPREMA"
+        MOV     R9, #PRIP
+        BL      LCDPRNT
+
+        LDMFD   SP!, {R9, LR}
+        MOV     PC, LR
+
+
+; The coffee is flowing
+STATE3  STMFD   SP!, {R9, LR}
+        
+        ; Turn on the Red and Yellow leds        
+        MOV     R9, #0b01100000 
+        BL      LEDS  
+
+        ; Wait for 30s
+        LDMFD   SP!, {R9, LR}
+        MOV     PC, LR
+
+
+; The milk is flowing
+STATE4  STMFD   SP!, {R9, LR}
+        
+        ; Turn on the Red, Yellow and Green leds        
+        MOV     R9, #0b11100000 
+        BL      LEDS  
+
+        LDMFD   SP!, {R9, LR}
+        MOV     PC, LR
+
+
+; The coffee is ready
+STATE5  STMFD   SP!, {R0, R1, R9, LR}
+        ; Turn on/off the Red, Yellow and Green leds   
+        LDR     R1, GPIO        ;load gpio address where the leds are connected
+        LDR     R9, [R1]        ;load the current state of the leds        
+
+        ; Write out "GOTOVO"
+        CMP     R2, #5
+        MOVEQ   R9, #GOTO
+        BLEQ    LCDPRNT
+        EORNE   R9, R9, #0b11100000     ;invert the current state
+        BLNE    LEDS  
+
+        LDMFD   SP!, {R0, R1, R9, LR}
+        MOV     PC, LR
+
+
+; Error
+STATE6  STMFD   SP!, {R0, R1, R9, LR} 
+        ; Turn on/off the Red led    
+        LDR     R1, GPIO        ;load gpio address where the leds are connected
+        LDR     R9, [R1]        ;load the current state of the leds
+        AND     R9, R9, #0b00100000     ;Turn off green and yellow led  
+
+        ; Write out "GRESKA"
+        CMP     R4, #1
+        MOVEQ   R9, #GRES
+        BLEQ    LCDPRNT
+        MOVEQ   R9, #0b00100000
+        EORNE   R9, R9, #0b00100000     ;invert the current state
+        BL      LEDS
+
+        LDMFD   SP!, {R0, R1, R9, LR} 
+        MOV     PC, LR
+
+        SWI     0x123456
+
+
+
+IRQ     STMFD   SP!, {R0, R1, R9, LR}
+        CMP     R3, #1
+        ADDEQ   R2, R2, #1      ; Increase state counter if the button was pressed once
+        ADDHI   R4, R4, #1      ; Increase the 6. state counter if the button was pressed multiple times
+        MOVHI   R2, #1          ; Set the state counter to one if the button was pressed multiple times
+
+        LDR     R1, RTC
+        
+        ; Reinitializing RTC (LR = 0, STAT = 0)
+        MOV     R0, #0
+        STR     R0, [R1, #12]   ; Set LR to 0
+        STR     R0, [R1, #8]    ; Set STAT to 0
+
+        ; Using the state counter find out to which state to go to 
+        CMP     R2, #2
+        BLEQ    STATE2
+        CMP     R2, #2
+        BEQ     KRAJ
+
+        CMP     R2, #3
+        BLEQ    STATE3
+        CMP     R2, #3
+        BEQ     KRAJ
+
+        CMP     R2, #4
+        BLEQ    STATE4
+        CMP     R2, #4
+        BEQ     KRAJ
+
+        ; Error handalling
+        ; After 180s go back to the 1. state, from 6.
+        CMP     R4, #7
+        STREQ   R0, [R1, #16]   ; Disable interrupts
+        MOVEQ   R2, #1          ; Set state counter to 1
+        MOVEQ   R3, #0          ; Set button counter to 0
+        MOVEQS  PC, #STATE1         ; Go to the address of STATE1 and exit IRQ mode
+
+        CMP     R4, #1  
+        LDREQ   R1, RTC
+        LDR     R0, CONST30
+        STR     R0, [R1, #4]    ; set the MR register back to 30s
+        BLGE    STATE6
+        BGE     KRAJ
+
+        ; After 180s go back to the 1. state, from 5.
+        CMP     R2, #11
+        STREQ   R0, [R1, #16]   ; Disable interrupts
+        MOVEQ   R2, #1          ; Set state counter to 1
+        MOVEQ   R3, #0          ; Set button counter to 0
+        MOVEQS  PC, #STATE1     ; Go to the address of STATE1 and exit IRQ mode
+        
+        CMP     R2, #5
+        BLGE    STATE5
+
+KRAJ    LDMFD   SP!, {R0, R1, R9, LR}
+        SUBS    PC, LR, #4
+    
+LEDS    STMFD   SP!, {R1}
+; Function to turn on/off the selected LEDs 
+; the arguments are passed through R0
+
+; R9 - which leds to turn on/off
+; R1 - memmory adress of the leds
+        LDR     R1, GPIO
+        STR     R9, [R1]
+
+        LDMFD   SP!, {R1}
+        MOV     PC, LR
+
+
+BTN_CHK STMFD SP!, {R0, R1}
+; Checks whether the button was pressed
+        LDR     R1, GPIO        ;Load the GPIO address
+        LDR     R0, [R1]        ;Load the gpio2 states
+        AND     R0, R0, #1      ;Masking the 0th bit
+        CMP     R0, #1          ;Compare 0th bit with 1 to determine if the button was pressed
+
+        LDMFD   SP!, {R0, R1}
+        MOV     PC, LR
+
+
+LCDPRNT STMFD SP!, {R0, R1, LR}
+; Prints out the given input (R9) to the LCD
+
+        ; Load LCD address from memory
+        LDR     R1, LCD
+        ADD     R1, R1, #4
+
+        ; Clear the LCD
+        MOV     R0, #0x0D
+        BL      LCDWR
+
+        LDRB   R0, [R9], #1
+
+        ; For the given input split it into 1 byte and write it out on lcd
+LCDP    BL      LCDWR                   ; Print out the letter
+        LDRB    R0, [R9], #1          ; Shift the values to the right to remove the printed out character
+        CMP     R0, #0            
+        BNE     LCDP
+
+        MOV     R0, #0x0A ; slanje znaka 0xA => ispis znakova na zaslon
+        BL      LCDWR
+
+        LDMFD   SP!, {R0, R1, LR}
+        MOV     PC, LR
+
+
+; Koristeno iz prezentacije Vanjska jedinica GPIO, slajd 30
+LCDWR   STMFD   SP!, {R0, LR}
+
+        ;Too slow for 30s
+        ;BL      BTN_CHK
+        ;ADDEQ   R3, R3, #1
+        
+        AND     R0, R0, #0x7F ; postavi bit 7 u nulu (za svaki slučaj, jer
+        ; u R0 je tu mogla biti 1) i pošalji znak
+        STRB    R0, [R1]
+        ORR     R0, R0, #0x80 ; postavi bit 7 u jedan (podigni impuls)
+        STRB    R0, [R1]
+        AND     R0, R0, #0x7F ; postavi bit 7 u nulu (spusti impuls)
+        STRB    R0, [R1]
+        LDMFD   SP!, {R0, LR}
+        MOV     PC, LR ; povratak
+
+LCD     DW      0xFFFF0F00      ; Gate B: LCD
+GPIO    DW      0xFFFF0B00      ; Gate A: Button (0-th bit)
+                                ;         LEDs (5 - R, 6 - Y, 7 - G)
+RTC     DW      0xFFFF0E00
+CONST30 DW      30           ;30s
+
+; Words that will be printed out on the LCD, but stored in memory in reverse
+;SPREMNO
+SPRE    DSTR    "SPREMNO"
+DELIM   DW      0
+;PRIPREMA
+PRIP    DSTR    "PRIPREMA"
+DELIM1  DW      0
+;GOTOVO
+GOTO    DSTR    "GOTOVO"
+DELIM2  DW      0
+;GRESKA
+GRES    DSTR    "GRESKA"
+DELIM3  DW      0
